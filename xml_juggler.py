@@ -1,34 +1,36 @@
 from xml.etree import ElementTree as ET
 
 
-class Juggler():
-    def __init__(self, xml_contents, request_headers=None):
-        self.xml_root = ET.fromstring(xml_contents)
+class Soap_Juggler():
 
-    def extract_data(self, elements, tag, namespace=''):
+    @staticmethod
+    def parse_soap_response(xml_root, x_path, namespaces):
+        parsed = xml_root.findall(
+            x_path,
+            namespaces
+        )
+        return parsed
+
+    @staticmethod
+    def extract_data(elements, tag, namespace=''):
         data = []
         for element in elements:
+            print('hey it is me', element)
             found = element.find(namespace+tag)
-            data.append(found.text)
+            data.append(found.text.rstrip())
         return data
 
 
-class AgregatorJuggler(Juggler):
-    def __init__(self, xml_contents, request_headers=None):
-        super().__init__(xml_contents, request_headers)
+class AgregatorJuggler(Soap_Juggler):
+    def __init__(self):
         self.namespaces = {
             'soap12': 'http://www.w3.org/2003/05/soap-envelope',
             'a': 'urn:Agregator'
         }
 
-        self.user_request_logs = self.xml_root.findall(
-            './soap12:Body'
-            '/a:ListOfUserRequestResponse/a:ListOfUserRequestResult/a:UserRequestLog',
-            self.namespaces
-        )
-
+    def reg_ns(self):
         ET.register_namespace(
-            '', 'urn:Agregator')
+            'a', 'urn:Agregator')
         ET.register_namespace(
             'xsi', 'http://www.w3.org/2001/XMLSchema-instance')
         ET.register_namespace(
@@ -36,42 +38,68 @@ class AgregatorJuggler(Juggler):
         ET.register_namespace(
             'soap12', 'http://www.w3.org/2003/05/soap-envelope')
 
-        print(ET.tostring(self.xml_root, encoding="unicode"))
+    def get_request_builder(self, request_template):
+        self.rq = self.AgregatorRequest(
+            request_template, self.namespaces, lambda: self.reg_ns())
+        return self.rq
 
-    def gather_user_requests(self, user_id,
-                             namespace='{urn:Agregator}'):
-        '''
-        1. Accept a list of requests (<UserRequestLog>) and user_id
-        2. Iterate through each log entry in that list
-            and find requests belonging to the specific user (via user_id)
-        3. Iterate through these requests and extract the actual data.
-        '''
-        trimmed = []
+    def get_response_parser(self, response):
+        self.rp = self.AgregatorResponse(
+            response, self.namespaces, lambda: self.reg_ns())
+        return self.rp
 
-        for log in self.user_request_logs:
-            for e in log:
-                if e.tag == namespace+'userId' and e.text == user_id:
-                    trimmed.append(log)
-        request_list = super().extract_data(trimmed, 'userRequest', namespace=namespace)
-        return request_list
+    class AgregatorRequest:
+        def __init__(self, request_template, namespaces, reg_ns):
+            self.xml_header = '<?xml version="1.0" encoding="utf-8"?>\n'
+            self.template_root = ET.fromstring(request_template)
+            self.namespaces = namespaces
+            reg_ns()
 
-    def gather_all_requests(self, namespace='{urn:Agregator}'):
-        '''
-        Extract all data inside <userRequest> and return it
-        '''
-        all_requests = super().extract_data(self.user_request_logs,
-                                            'userRequest', namespace=namespace)
-        return all_requests
+        def build_soap_request(self, begin, end):
+            element = self.template_root.find(
+                './soap12:Body'
+                '/a:GetListOfUsersReq',
+                self.namespaces,
+            )
+            element[0].text = begin  # <startDate> tag
+            element[1].text = end  # <endDate> tag
+            print(element[0].text, element[1].text)
+            built = self.xml_header
+            built += ET.tostring(self.template_root, encoding="unicode")
+            return built
 
-    def build_request(self, request_template, begin, end):
-        template_root = ET.fromstring(request_template)
-        element = template_root.find(
-            './soap12:Body'
-            '/a:ListOfUserRequest',
-            self.namespaces,
-        )
-        element[0].text = begin  # <begin> tag
-        element[1].text = end  # <end> tag
-        print(element[0].text, element[1].text)
-        built = ET.tostring(template_root, encoding="unicode")
-        return built
+    class AgregatorResponse:
+        def __init__(self, response, namespaces, reg_ns):
+            self.x_path = './soap12:Body/a:GetListOfUsersReqResponse/a:GetListOfUsersReqResult/'
+            self.xml_root = ET.fromstring(response)
+            self.user_request_logs = Soap_Juggler.parse_soap_response(
+                self.xml_root, self.x_path, namespaces)
+            reg_ns()
+
+        def gather_user_requests(self, user_id,
+                                 namespace='{urn:Agregator}'):
+            '''
+            1. Accept a list of requests (<UserRequest>) and user_id
+            2. Iterate through each log entry in that list
+                and find requests belonging to the specific user (via user_id)
+            3. Iterate through these requests and extract the actual data.
+            '''
+            trimmed = []
+            for log in self.user_request_logs:
+                for e in log:
+                    if e.tag == namespace+'UserId' and e.text == user_id:
+                        trimmed.append(log)
+            request_list = Soap_Juggler.extract_data(
+                trimmed, 'DishName', namespace=namespace)
+            return request_list
+
+        def gather_all_requests(self, namespace='{urn:Agregator}'):
+            '''
+            Extract all dishes inside <UserRequest> and return it
+            '''
+            all_requests = Soap_Juggler.extract_data(
+                self.user_request_logs,
+                'DishName',
+                namespace=namespace
+            )
+            return all_requests
